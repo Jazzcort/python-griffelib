@@ -1,0 +1,117 @@
+From b450abb0b372f594271a017153a297c75651531a Mon Sep 17 00:00:00 2001
+From: Chih-Tao Lee <jason101011113@gmail.com>
+Date: Sat, 22 Aug 2026 05:59:06 -0400
+Subject: [PATCH] tests: Skip tests when running without dependencies from the
+ root (griffe)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+When running tests within `griffelib` alone as root, importing `griffecli` and `mkdocstrings` at module level causes `ModuleNotFoundError`. Defer these imports and guard them with `pytest.importorskip()` so the tests skip gracefully instead of failing.
+
+Issue-484: https://github.com/mkdocstrings/griffe/issues/484
+PR-485: https://github.com/mkdocstrings/griffe/pull/485
+Co-authored-by: Timothée Mazzucotelli <dev@pawamoy.fr>
+---
+ packages/griffelib/pyproject.toml    |  3 +++
+ packages/griffelib/tests/test_api.py | 27 +++++++++++++++++++--------
+ packages/griffelib/tests/test_git.py |  5 ++++-
+ 3 files changed, 26 insertions(+), 9 deletions(-)
+
+diff --git a/packages/griffelib/pyproject.toml b/packages/griffelib/pyproject.toml
+index cf6b4733..0794ded8 100644
+--- a/packages/griffelib/pyproject.toml
++++ b/packages/griffelib/pyproject.toml
+@@ -41,6 +41,9 @@ classifiers = [
+ # to download and inspect packages from PyPI.
+ pypi = ["pip>=24.0", "platformdirs>=4.2", "wheel>=0.42"]
+ 
++[dependency-groups]
++dev = ["pytest>=8.2", "pytest-gitconfig>=0.8.0", "jsonschema>=4.18"]
++
+ [tool.uv-dynamic-versioning]
+ pattern = '(?P<base>\d+\.\d+\.\d+)'
+ 
+diff --git a/packages/griffelib/tests/test_api.py b/packages/griffelib/tests/test_api.py
+index 835755a0..d4d29edb 100644
+--- a/packages/griffelib/tests/test_api.py
++++ b/packages/griffelib/tests/test_api.py
+@@ -24,35 +24,46 @@ from pathlib import Path
+ from typing import TYPE_CHECKING
+ 
+ import pytest
+-from mkdocstrings import Inventory
+ 
+ import griffe
+-import griffecli
++
++try:
++    import griffecli
++except ModuleNotFoundError:
++    griffecli = None
+ 
+ if TYPE_CHECKING:
+     from collections.abc import Iterable, Iterator
+     from types import ModuleType
+ 
++    from mkdocstrings import Inventory
++
+ 
+-TESTED_MODULES = (griffe, griffecli)
++TESTED_MODULES = (griffe, griffecli) if griffecli else (griffe,)
+ _test_all_modules = pytest.mark.parametrize("tested_module", TESTED_MODULES)
+ 
+ 
+ @pytest.fixture(name="inventory", scope="module")
+ def _fixture_inventory() -> Inventory:
++    mkdocstrings = pytest.importorskip("mkdocstrings")
+     inventory_file = Path(__file__).parent.parent / "site" / "objects.inv"
+     if not inventory_file.exists():
+         pytest.skip("The objects inventory is not available.")
++
+     with inventory_file.open("rb") as file:
+-        return Inventory.parse_sphinx(file)
++        return mkdocstrings.Inventory.parse_sphinx(file)
+ 
+ 
+ def _load_modules(*modules: ModuleType) -> griffe.GriffeLoader:
++    extensions = ["unpack_typeddict"]
++    try:
++        import griffe_inherited_docstrings  # noqa: F401, PLC0415
++
++        extensions.append("griffe_inherited_docstrings")
++    except ImportError:
++        pass
+     loader = griffe.GriffeLoader(
+-        extensions=griffe.load_extensions(
+-            "griffe_inherited_docstrings",
+-            "unpack_typeddict",
+-        ),
++        extensions=griffe.load_extensions(*extensions),
+     )
+     for module in modules:
+         loader.load(module.__name__)
+diff --git a/packages/griffelib/tests/test_git.py b/packages/griffelib/tests/test_git.py
+index 0552eabe..877b11fd 100644
+--- a/packages/griffelib/tests/test_git.py
++++ b/packages/griffelib/tests/test_git.py
+@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
+ 
+ import pytest
+ 
+-from griffe import Module, check, load_git
++from griffe import Module, load_git
+ from tests import FIXTURES_DIR
+ 
+ if TYPE_CHECKING:
+@@ -117,4 +117,7 @@ def test_load_git_errors(git_repo: Path) -> None:
+ 
+ def test_git_failures(tmp_path: Path) -> None:
+     """Test failures to use Git."""
++    pytest.importorskip("griffecli")
++    from griffe import check  # noqa: PLC0415
++
+     assert check(tmp_path) == 2
+-- 
+2.48.1
+
